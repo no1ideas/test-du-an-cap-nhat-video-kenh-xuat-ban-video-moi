@@ -1,86 +1,119 @@
-// Tệp này PHẢI được đặt tên là 'get-videos.js' 
-// và nằm TRONG một thư mục tên là 'api'
-// Đường dẫn đầy đủ sẽ là: [thư mục dự án]/api/get-videos.js
+// api/get-videos.js
+// Trả về 3 video mới nhất của kênh YouTube.
+// ĐẦU VÀO cho query "channel" có thể là: link (https://youtube.com/@... hoặc /channel/UC... hoặc /user/...),
+// @handle (ví dụ: @MrBeast) hoặc channelId (UCxxxx...).
+// Yêu cầu: biến môi trường YOUTUBE_API_KEY.
 
-// node-fetch là thư viện để gọi API từ backend
-// Chúng ta dùng require() vì package.json không có "type": "module"
 const fetch = require('node-fetch');
 
-// Đây là nơi Vercel Serverless Function xử lý yêu cầu
-export default async function handler(request, response) {
-    
-    // 1. Lấy API Key từ Biến Môi trường (AN TOÀN)
-    // Bạn phải đặt biến này trong cài đặt dự án Vercel
-    const API_KEY = process.env.YOUTUBE_API_KEY;
-
-    if (!API_KEY) {
-        // Trả về lỗi nếu bạn quên cài đặt API Key
-        // Dùng console.error để ghi log lỗi phía server
-        console.error('Lỗi: YOUTUBE_API_KEY chưa được cài đặt trong Vercel Environment Variables.');
-        return response.status(500).json({ error: 'Lỗi máy chủ: API Key chưa được cấu hình.' });
-    }
-
-    // 2. Lấy channelId từ tham số query (ví dụ: /api/get-videos?channelId=UC...)
-    const { channelId } = request.query;
-
-    if (!channelId) {
-        return response.status(400).json({ error: 'Yêu cầu không hợp lệ: Thiếu tham số channelId' });
-    }
-
-    try {
-        // 3. Gọi API YouTube để tìm playlist "uploads" của kênh
-        // Chúng ta cần lấy 'snippet' để có tên kênh (channelTitle)
-        // và 'contentDetails' để có ID playlist 'uploads'
-        const channelUrl = `https://www.googleapis.com/youtube/v3/channels?part=contentDetails,snippet&id=${channelId}&key=${API_KEY}`;
-        
-        const channelRes = await fetch(channelUrl);
-        if (!channelRes.ok) {
-            // Nếu gọi API thất bại (ví dụ: key sai), ném lỗi
-            throw new Error(`Lỗi YouTube API (Channels): ${channelRes.statusText}`);
-        }
-        
-        const channelData = await channelRes.json();
-
-        if (!channelData.items || channelData.items.length === 0) {
-            return response.status(404).json({ error: 'Không tìm thấy kênh với ID này' });
-        }
-
-        // 4. Lấy thông tin kênh và ID playlist uploads
-        const channelTitle = channelData.items[0].snippet.title;
-        const uploadsPlaylistId = channelData.items[0].contentDetails.relatedPlaylists.uploads;
-
-        if (!uploadsPlaylistId) {
-             return response.status(404).json({ error: 'Kênh này không có video công khai nào.' });
-        }
-
-        // 5. Lấy 3 video mới nhất từ playlist "uploads" đó
-        const videoUrl = `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId=${uploadsPlaylistId}&maxResults=3&key=${API_KEY}`;
-        
-        const videoRes = await fetch(videoUrl);
-        if (!videoRes.ok) {
-            throw new Error(`Lỗi YouTube API (PlaylistItems): ${videoRes.statusText}`);
-        }
-        
-        const videoData = await videoRes.json();
-
-        // 6. Trích xuất (map) thông tin cần thiết từ kết quả trả về
-        const videos = videoData.items.map(item => ({
-            id: item.snippet.resourceId.videoId, // ID của video
-            title: item.snippet.title,          // Tiêu đề video
-            publishedAt: item.snippet.publishedAt // Ngày đăng
-        }));
-
-        // 7. Trả dữ liệu về cho trang web (frontend)
-        // Set header để cho phép caching phía trình duyệt trong 5 phút (300 giây)
-        response.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate');
-        response.status(200).json({
-            channelTitle: channelTitle,
-            videos: videos
-        });
-
-    } catch (error) {
-        // 8. Bắt và xử lý mọi lỗi xảy ra
-        console.error('Lỗi trong Vercel function:', error);
-        response.status(500).json({ error: 'Lỗi máy chủ nội bộ. Không thể tải video.' });
-    }
+// ─── Helpers ───────────────────────────────────────────────────────────────────
+function json(res, status, data) {
+  // Cho phép gọi trực tiếp từ trình duyệt
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (status === 200) res.setHeader('Cache-Control', 's-maxage=120, stale-while-revalidate');
+  return res.status(status).json(data);
 }
+
+// Chuẩn hoá: nhận link/@handle/ID -> trả channelId (UC...)
+async function resolveChannelId(input, API_KEY) {
+  if (!input) return null;
+  const raw = input.trim();
+
+  // 1) Nếu đã là UC...
+  const mUC = raw.match(/(UC[0-9A-Za-z_-]{20,})/);
+  if (mUC) return mUC[1];
+
+  // 2) Link dạng /channel/UC...
+  const mChannel = raw.match(/youtube\.com\/channel\/(UC[0-9A-Za-z_-]{20,})/i);
+  if (mChannel) return mChannel[1];
+
+  // 3) Link dạng /user/username (kiểu cũ)
+  const mUser = raw.match(/youtube\.com\/user\/([A-Za-z0-9._-]+)/i);
+  if (mUser) {
+    const url = `https://www.googleapis.com/youtube/v3/channels?part=id&forUsername=${encodeURIComponent(
+      mUser[1]
+    )}&key=${API_KEY}`;
+    const r = await fetch(url);
+    const j = await r.json();
+    if (j.items && j.items[0]) return j.items[0].id;
+  }
+
+  // 4) @handle (có thể nằm trong link hoặc chuỗi)
+  const mHandle = raw.match(/@([A-Za-z0-9._-]+)/);
+  const q = mHandle ? mHandle[1] : raw;
+
+  // 5) Tìm kênh bằng Search API (khi chưa có UC)
+  const sUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&maxResults=1&q=${encodeURIComponent(
+    q
+  )}&key=${API_KEY}`;
+  const sr = await fetch(sUrl);
+  const sj = await sr.json();
+  if (sj.items && sj.items[0]) {
+    // search có thể trả về trong id.channelId hoặc snippet.channelId
+    return sj.items[0].id?.channelId || sj.items[0].snippet?.channelId || null;
+  }
+
+  return null;
+}
+
+function fmtVN(iso) {
+  const d = new Date(iso);
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mo = String(d.getMonth() + 1).padStart(2, '0');
+  const yy = d.getFullYear();
+  return `${hh}:${mm} | ${dd}/${mo}/${yy}`;
+}
+
+// ─── Handler ───────────────────────────────────────────────────────────────────
+module.exports = async function (req, res) {
+  if (req.method === 'OPTIONS') return json(res, 200, { ok: true });
+  if (req.method !== 'GET') return json(res, 405, { error: 'Method Not Allowed' });
+
+  const API_KEY = process.env.YOUTUBE_API_KEY;
+  if (!API_KEY) return json(res, 500, { error: 'Thiếu YOUTUBE_API_KEY' });
+
+  const channelInput = (req.query.channel || req.query.channelId || '').trim();
+  const maxResults = Number(req.query.maxResults || 3);
+  if (!channelInput) return json(res, 400, { error: 'Thiếu tham số channel' });
+
+  try {
+    // 1) Chuẩn hoá thành channelId (UC…)
+    const channelId = await resolveChannelId(channelInput, API_KEY);
+    if (!channelId) return json(res, 404, { error: 'Không xác định được channelId từ đầu vào' });
+
+    // 2) Lấy playlist uploads + tên kênh
+    const chUrl = `https://www.googleapis.com/youtube/v3/channels?part=contentDetails,snippet&id=${channelId}&key=${API_KEY}`;
+    const chRes = await fetch(chUrl);
+    if (!chRes.ok) throw new Error(`channels: ${chRes.status} ${chRes.statusText}`);
+    const chData = await chRes.json();
+    if (!chData.items || !chData.items[0]) return json(res, 404, { error: 'Không tìm thấy kênh' });
+
+    const channelTitle = chData.items[0].snippet?.title || channelId;
+    const uploadsId = chData.items[0].contentDetails?.relatedPlaylists?.uploads;
+    if (!uploadsId) return json(res, 404, { error: 'Kênh không có uploads playlist' });
+
+    // 3) Lấy video
+    const plUrl = `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId=${uploadsId}&maxResults=${maxResults}&key=${API_KEY}`;
+    const plRes = await fetch(plUrl);
+    if (!plRes.ok) throw new Error(`playlistItems: ${plRes.status} ${plRes.statusText}`);
+    const plData = await plRes.json();
+
+    const videos = (plData.items || [])
+      .map((it) => ({
+        id: it?.snippet?.resourceId?.videoId,
+        title: it?.snippet?.title,
+        publishedAt: it?.snippet?.publishedAt,
+        publishedAtVN: it?.snippet?.publishedAt ? fmtVN(it.snippet.publishedAt) : undefined
+      }))
+      .filter((v) => !!v.id);
+
+    return json(res, 200, { channelId, channelTitle, videos });
+  } catch (e) {
+    console.error('get-videos error:', e);
+    return json(res, 500, { error: 'Lỗi máy chủ nội bộ' });
+  }
+};
