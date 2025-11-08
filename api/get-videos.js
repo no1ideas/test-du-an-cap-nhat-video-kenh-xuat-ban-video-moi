@@ -1,7 +1,7 @@
 // api/get-videos.js
-// Supports: UCID, @handle, /c/<name>, /user/<name>, full YouTube URLs
+// Supports: UCID, @handle (via forHandle), /c/<name>, /user/<name>, full YouTube URLs
 // Accepts both ?channelId= and ?channel=
-// Env: YOUTUBE_API_KEY, CORS_ORIGIN (optional)
+// Env: YOUTUBE_API_KEY, (optional) CORS_ORIGIN
 
 export const config = { runtime: 'nodejs18.x' };
 
@@ -17,6 +17,8 @@ export default async function handler(req, res) {
   if (!API_KEY) return res.status(500).json({ error: 'Missing YOUTUBE_API_KEY' });
 
   const inputRaw = (req.query.channel ?? req.query.channelId ?? '').trim();
+  console.log('[get-videos] query =', req.query);
+
   if (!inputRaw) return res.status(400).json({ error: 'Missing channel or channelId' });
 
   try {
@@ -39,11 +41,13 @@ export default async function handler(req, res) {
     if (!vidsRes.ok) throw new Error(`playlistItems: ${vidsRes.status} ${vidsRes.statusText}`);
     const vidsData = await vidsRes.json();
 
-    const videos = (vidsData.items || []).map((it) => ({
-      id: it?.snippet?.resourceId?.videoId,
-      title: it?.snippet?.title,
-      publishedAt: it?.snippet?.publishedAt
-    })).filter(v => v.id);
+    const videos = (vidsData.items || [])
+      .map((it) => ({
+        id: it?.snippet?.resourceId?.videoId,
+        title: it?.snippet?.title,
+        publishedAt: it?.snippet?.publishedAt
+      }))
+      .filter((v) => v.id);
 
     return res.status(200).json({ channelTitle: title, videos });
   } catch (e) {
@@ -54,20 +58,24 @@ export default async function handler(req, res) {
 
 // ---------- Helpers ----------
 async function resolveChannelId(input, API_KEY) {
-  const raw = input.trim();
+  const raw = (input || '').trim();
+  if (!raw) return null;
 
   // 1) UCID present
-  const mUC = raw.match(/UC[0-9A-Za-z_-]{20,}/);
-  if (mUC) return mUC[0];
+  const mUC = raw.match(/(UC[0-9A-Za-z_-]{20,})/);
+  if (mUC) return mUC[1];
 
   // 2) /channel/UC...
-  const mCh = raw.match(/channel\/(UC[0-9A-Za-z_-]{20,})/i);
-  if (mCh) return mCh[1];
+  const mChannel = raw.match(/youtube\.com\/channel\/(UC[0-9A-Za-z_-]{20,})/i);
+  if (mChannel) return mChannel[1];
 
-  // 3) /user/<name>
+  // 3) /user/<name> (legacy username)
   const mUser = raw.match(/youtube\.com\/user\/([A-Za-z0-9._-]+)/i);
   if (mUser) {
-    const r = await fetch(`https://www.googleapis.com/youtube/v3/channels?part=id&forUsername=${encodeURIComponent(mUser[1])}&key=${API_KEY}`);
+    const url = `https://www.googleapis.com/youtube/v3/channels?part=id&forUsername=${encodeURIComponent(
+      mUser[1]
+    )}&key=${API_KEY}`;
+    const r = await fetch(url);
     const j = await r.json();
     if (j.items?.[0]?.id) return j.items[0].id;
   }
@@ -75,17 +83,37 @@ async function resolveChannelId(input, API_KEY) {
   // 4) @handle or /c/<name>
   const mHandle = raw.match(/@([A-Za-z0-9._-]+)/);
   const mCustom = raw.match(/youtube\.com\/c\/([A-Za-z0-9._-]+)/i);
-  const keyword = mHandle ? mHandle[1] : (mCustom ? mCustom[1] : null);
+  const handle = mHandle ? `@${mHandle[1]}` : null;
+  const keyword = mHandle ? mHandle[1] : mCustom ? mCustom[1] : null;
 
+  // 4a) PRIMARY: channels?forHandle=@handle (more reliable than search)
+  if (handle) {
+    const u = `https://www.googleapis.com/youtube/v3/channels?part=id&forHandle=${encodeURIComponent(
+      handle
+    )}&key=${API_KEY}`;
+    const r = await fetch(u);
+    const j = await r.json();
+    if (j.items?.[0]?.id) return j.items[0].id;
+  }
+
+  // 4b) Fallback: search by handle/custom name
   if (keyword) {
-    const s = await fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&maxResults=1&q=${encodeURIComponent(keyword)}&key=${API_KEY}`);
+    const s = await fetch(
+      `https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&maxResults=1&q=${encodeURIComponent(
+        keyword
+      )}&key=${API_KEY}`
+    );
     const sj = await s.json();
     const cid = sj.items?.[0]?.id?.channelId || sj.items?.[0]?.snippet?.channelId;
     if (cid) return cid;
   }
 
-  // 5) last resort: search whole string
-  const s2 = await fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&maxResults=1&q=${encodeURIComponent(raw)}&key=${API_KEY}`);
+  // 5) Last resort: search the whole input string
+  const s2 = await fetch(
+    `https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&maxResults=1&q=${encodeURIComponent(
+      raw
+    )}&key=${API_KEY}`
+  );
   const s2j = await s2.json();
   return s2j.items?.[0]?.id?.channelId || null;
 }
