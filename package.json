@@ -3,6 +3,8 @@
   "version": "1.0.0",
   "description": "YouTube Tracker App for Vercel",
   "dependencies": {
-    "node-fetch": "^2.6.0"
+    "@vercel/kv": "^1.0.1",
+    "node-fetch": "^2.6.0",
+    "resend": "^4.0.0"
   }
 }
