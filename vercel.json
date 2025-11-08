@@ -1,0 +1,5 @@
+{
+  "crons": [
+    { "path": "/api/check-channels", "schedule": "*/10 * * * *" }
+  ]
+}
