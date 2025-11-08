@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="vi">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -11,34 +11,34 @@
     <h1 class="text-3xl font-bold text-center text-red-600 mb-8">YouTube Video Tracker</h1>
 
     <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-      <!-- Khối bên trái -->
+      <!-- Left column -->
       <div class="bg-white p-6 rounded-2xl shadow">
-        <h2 class="text-xl font-semibold mb-4">Quản Lý Kênh</h2>
-        <label class="block mb-2 text-gray-600">Thêm kênh YouTube (link / @handle / UCID):</label>
+        <h2 class="text-xl font-semibold mb-4">Channel Manager</h2>
+        <label class="block mb-2 text-gray-600">Add a YouTube channel (URL / @handle / UCID):</label>
         <div class="flex">
           <input
             id="channelInput"
             type="text"
-            placeholder="ví dụ: https://www.youtube.com/@MrBeast hoặc UCX6OQ3DkcsbYNE6H8uQQuVA"
+            placeholder="e.g., https://www.youtube.com/@MrBeast or UCX6OQ3DkcsbYNE6H8uQQuVA"
             class="flex-grow border border-gray-300 rounded-l-lg px-3 py-2 focus:ring focus:ring-red-200"
           />
           <button
             id="addBtn"
             class="bg-red-600 text-white px-5 py-2 rounded-r-lg hover:bg-red-700 transition"
           >
-            Thêm
+            Add
           </button>
         </div>
         <p class="text-sm text-gray-500 mt-2">
-          Bạn có thể nhập <b>link kênh</b>, <b>@handle</b> hoặc <b>UCID</b>.
+          You can enter a <b>channel link</b>, <b>@handle</b>, or <b>UCID</b>.
         </p>
       </div>
 
-      <!-- Khối bên phải -->
+      <!-- Right column -->
       <div class="bg-white p-6 rounded-2xl shadow">
-        <h2 class="text-xl font-semibold mb-4">Video Mới Nhất</h2>
+        <h2 class="text-xl font-semibold mb-4">Latest Videos</h2>
         <div id="videoList" class="space-y-4 text-sm text-gray-700">
-          <p>Chưa có kênh nào. Hãy thêm ID hoặc link kênh ở bên trái.</p>
+          <p>No channels yet. Please add a channel ID or link on the left.</p>
         </div>
       </div>
     </div>
@@ -49,18 +49,39 @@
     const input = document.getElementById("channelInput");
     const videoList = document.getElementById("videoList");
 
-    addBtn.addEventListener("click", async () => {
+    function setLoading(channel) {
+      videoList.innerHTML = `
+        <div class="p-4 border border-gray-200 rounded-lg text-center text-gray-500">
+          <div class="flex items-center justify-center gap-2">
+            <svg class="animate-spin h-5 w-5" viewBox="0 0 24 24" fill="none">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor"
+                d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+            </svg>
+            <span>Loading data for <b>${channel}</b>…</span>
+          </div>
+        </div>
+      `;
+    }
+
+    function formatLocal(dt) {
+      try {
+        return new Intl.DateTimeFormat('vi-VN', {
+          dateStyle: 'short',
+          timeStyle: 'short',
+          timeZone: 'Asia/Ho_Chi_Minh'
+        }).format(new Date(dt));
+      } catch { return dt; }
+    }
+
+    async function fetchVideos() {
       const channel = input.value.trim();
       if (!channel) {
-        alert("Vui lòng nhập link, @handle hoặc ID kênh YouTube!");
+        alert("Please enter a channel URL, @handle, or UCID!");
         return;
       }
 
-      videoList.innerHTML = `
-        <div class="p-4 border border-gray-200 rounded-lg text-center text-gray-500">
-          Đang tải dữ liệu cho <b>${channel}</b>...
-        </div>
-      `;
+      setLoading(channel);
 
       try {
         const res = await fetch(`/api/get-videos?channel=${encodeURIComponent(channel)}`);
@@ -69,7 +90,7 @@
         if (!res.ok || data.error) {
           videoList.innerHTML = `
             <div class="p-4 border border-red-300 bg-red-50 text-red-600 rounded-lg">
-              <b>${channel}</b><br>Lỗi: ${data.error || "Không tìm thấy kênh với ID này"}
+              <b>${channel}</b><br/>Error: ${data.error || "Channel not found with this identifier."}
             </div>
           `;
           return;
@@ -77,10 +98,10 @@
 
         const { channelTitle, videos } = data;
 
-        if (!videos || videos.length === 0) {
+        if (!Array.isArray(videos) || videos.length === 0) {
           videoList.innerHTML = `
             <div class="p-4 border border-yellow-300 bg-yellow-50 text-yellow-700 rounded-lg">
-              Kênh <b>${channelTitle}</b> chưa có video nào.
+              Channel <b>${channelTitle}</b> has no videos yet.
             </div>
           `;
           return;
@@ -89,27 +110,32 @@
         const html = `
           <div class="p-4 border border-gray-300 rounded-lg bg-gray-50">
             <h3 class="font-semibold text-lg text-red-600 mb-3">${channelTitle}</h3>
-            ${videos
-              .map(
-                (v) => `
+            ${videos.map(v => `
               <div class="mb-3">
-                <a href="https://www.youtube.com/watch?v=${v.id}" target="_blank" class="text-blue-600 font-medium hover:underline">
+                <a href="https://www.youtube.com/watch?v=${v.id}" target="_blank"
+                   class="text-blue-600 font-medium hover:underline">
                   ${v.title}
                 </a>
-                <div class="text-xs text-gray-500">📅 ${v.publishedAtVN}</div>
-              </div>`
-              )
-              .join("")}
+                <div class="text-xs text-gray-500">📅 ${formatLocal(v.publishedAt)}</div>
+              </div>
+            `).join("")}
           </div>
         `;
         videoList.innerHTML = html;
+
       } catch (err) {
+        console.error(err);
         videoList.innerHTML = `
           <div class="p-4 border border-red-300 bg-red-50 text-red-600 rounded-lg">
-            Đã xảy ra lỗi khi tải dữ liệu từ server.
+            An error occurred while loading data from the server.
           </div>
         `;
       }
+    }
+
+    addBtn.addEventListener("click", fetchVideos);
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") fetchVideos();
     });
   </script>
 </body>
