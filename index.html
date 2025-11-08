@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YouTube Channel Tracker</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .video-card { transition: all 0.3s ease; }
+        .video-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+        .loader {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #db2777; /* pink-600 */
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800">
+
+    <div class="container mx-auto p-4 md:p-8">
+        <h1 class="text-3xl font-bold text-center mb-6 text-red-600">YouTube Video Tracker</h1>
+        
+        <div class="flex flex-col md:flex-row gap-6">
+            <!-- Bảng điều khiển bên trái -->
+            <div class="w-full md:w-1/3 bg-white p-6 rounded-lg shadow-md">
+                <h2 class="text-xl font-semibold mb-4">Quản lý Kênh</h2>
+                
+                <div class="mb-6">
+                    <label for="channel-input" class="block text-sm font-medium text-gray-700 mb-2">Thêm ID Kênh YouTube:</label>
+                    <div class="flex gap-2">
+                        <input type="text" id="channel-input" class="flex-grow w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-red-500 focus:border-red-500" placeholder="ví dụ: UC... (ID kênh)">
+                        <button id="add-channel-btn" class="px-4 py-2 bg-red-600 text-white rounded-md shadow-sm hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2">
+                            Thêm
+                        </button>
+                    </div>
+                     <p class="text-xs text-gray-500 mt-2">Bạn cần nhập ID kênh (ví dụ: UCM-S-s_s-a...), không phải đường link hay tên kênh.</p>
+                </div>
+            </div>
+
+            <!-- Bảng tin bên phải -->
+            <div class="w-full md:w-2/3">
+                <h2 class="text-2xl font-semibold mb-4">Video Mới Nhất</h2>
+                <div id="video-feed" class="space-y-4">
+                    <p id="empty-state" class="text-center text-gray-500 bg-white p-6 rounded-lg shadow-md">Chưa có kênh nào. Hãy thêm ID kênh ở bên trái.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Lưu các kênh đang theo dõi
+        const channels = new Set();
+        const videoFeed = document.getElementById('video-feed');
+        const emptyState = document.getElementById('empty-state');
+        const addChannelBtn = document.getElementById('add-channel-btn');
+        const channelInput = document.getElementById('channel-input');
+
+        // Định dạng ngày giờ sang kiểu Việt Nam
+        function formatRealDate(isoDate) {
+            const date = new Date(isoDate);
+            return date.toLocaleString('vi-VN', {
+                hour: '2-digit',
+                minute: '2-digit',
+                day: '2-digit',
+                month: '2-digit',
+                year: 'numeric'
+            });
+        }
+
+        // Hàm gọi "backend" (Serverless Function)
+        async function fetchVideos(channelId) {
+            // Hiển thị trạng thái đang tải
+            renderChannelCard(channelId, { loading: true });
+
+            try {
+                // Đây là cách chúng ta gọi API an toàn.
+                // Trang web gọi đến '/api/get-videos', Vercel sẽ chạy tệp api/get-videos.js
+                const response = await fetch(`/api/get-videos?channelId=${channelId}`);
+                
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || 'Lỗi không xác định');
+                }
+
+                const data = await response.json();
+                // Hiển thị dữ liệu thật
+                renderChannelCard(channelId, { loading: false, ...data });
+
+            } catch (error) {
+                console.error('Lỗi khi tải video:', error);
+                renderChannelCard(channelId, { loading: false, error: error.message });
+            }
+        }
+
+        // Hiển thị thẻ thông tin kênh (đang tải, lỗi, hoặc thành công)
+        function renderChannelCard(channelId, data) {
+            if (emptyState && emptyState.parentElement) {
+                emptyState.parentElement.removeChild(emptyState);
+            }
+
+            let card = document.getElementById(`channel-${channelId}`);
+            if (!card) {
+                card = document.createElement('div');
+                card.id = `channel-${channelId}`;
+                card.className = 'video-card bg-white p-4 rounded-lg shadow-md';
+                videoFeed.prepend(card); // Thêm vào đầu
+            }
+
+            let content = '';
+            if (data.loading) {
+                content = `<div class="flex items-center gap-2">
+                                <div class="loader"></div>
+                                <span class="text-gray-500">Đang tải dữ liệu cho kênh ${channelId}...</span>
+                           </div>`;
+            } else if (data.error) {
+                content = `<h3 class="text-xl font-bold mb-2 text-red-700">${channelId}</h3>
+                           <p class="text-red-500">Lỗi: ${data.error}</p>`;
+            } else {
+                let videosHTML = '';
+                if (data.videos.length === 0) {
+                    videosHTML = '<li class="text-gray-500">Không tìm thấy video nào.</li>';
+                } else {
+                    data.videos.forEach(video => {
+                        videosHTML += `
+                            <li class="flex flex-col sm:flex-row justify-between sm:items-center py-2 border-b last:border-b-0">
+                                <a href="https://www.youtube.com/watch?v=${video.id}" target="_blank" rel="noopener noreferrer" class="text-gray-800 hover:text-red-600 break-words">${video.title}</a>
+                                <span class="text-sm text-gray-500 whitespace-nowrap pt-1 sm:pt-0 sm:pl-4">${formatRealDate(video.publishedAt)}</span>
+                            </li>
+                        `;
+                    });
+                }
+                
+                content = `
+                    <h3 class="text-xl font-bold mb-2 text-red-700">${data.channelTitle || channelId}</h3>
+                    <ul class="divide-y divide-gray-200">
+                        ${videosHTML}
+                    </ul>
+                `;
+            }
+            card.innerHTML = content;
+        }
+
+        // Sự kiện nhấn nút "Thêm"
+        addChannelBtn.addEventListener('click', () => {
+            const channelId = channelInput.value.trim();
+            if (!channelId) {
+                // Sử dụng modal tùy chỉnh thay vì alert
+                showModal("Vui lòng nhập ID kênh.");
+                return;
+            }
+            if (channels.has(channelId)) {
+                // Sử dụng modal tùy chỉnh thay vì alert
+                showModal("Kênh này đã được thêm.");
+                return;
+            }
+
+            channels.add(channelId);
+            fetchVideos(channelId); // Gọi để lấy dữ liệu thật
+            channelInput.value = '';
+        });
+
+        // (Tính năng tự động cập nhật sẽ cần nhiều logic phức tạp hơn, 
+        // ví dụ: setInterval để gọi lại fetchVideos() cho tất cả các kênh)
+        // setInterval(() => {
+        //     channels.forEach(id => fetchVideos(id));
+        // }, 300000); // 5 phút cập nhật 1 lần
+        
+        // --- Bổ sung: Modal tùy chỉnh thay cho alert() ---
+        
+        // Thêm HTML cho modal vào body
+        const modalHTML = `
+            <div id="custom-modal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full flex items-center justify-center" style="display: none; z-index: 50;">
+                <div class="relative mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+                    <div class="mt-3 text-center">
+                        <h3 class="text-lg leading-6 font-medium text-gray-900">Thông báo</h3>
+                        <div class="mt-2 px-7 py-3">
+                            <p id="modal-message" class="text-sm text-gray-500"></p>
+                        </div>
+                        <div class="items-center px-4 py-3">
+                            <button id="modal-close-btn" class="px-4 py-2 bg-red-600 text-white text-base font-medium rounded-md w-full shadow-sm hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500">
+                                Đã hiểu
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+        document.body.insertAdjacentHTML('beforeend', modalHTML);
+
+        const modal = document.getElementById('custom-modal');
+        const modalMessage = document.getElementById('modal-message');
+        const modalCloseBtn = document.getElementById('modal-close-btn');
+
+        function showModal(message) {
+            modalMessage.textContent = message;
+            modal.style.display = 'flex';
+        }
+
+        modalCloseBtn.addEventListener('click', () => {
+            modal.style.display = 'none';
+        });
+        
+        // Xóa lỗi "type*=" trong input
+        document.addEventListener('DOMContentLoaded', () => {
+            const inputElement = document.getElementById('channel-input');
+            if (inputElement.hasAttribute('type*')) {
+                inputElement.removeAttribute('type*');
+                inputElement.setAttribute('type', 'text');
+            }
+
+            // Sửa lỗi tham chiếu 'emptyState' trước khi nó được gán
+            const initialState = document.getElementById('empty-state');
+            if (initialState && !emptyState) {
+                 // Gán lại nếu emptyState là null
+                 // Tuy nhiên, logic ban đầu đã gán rồi, nhưng cần kiểm tra
+                 // lỗi logic trong renderChannelCard
+            }
+        });
+
+        // Sửa lỗi logic: emptyState bị xóa và tham chiếu
+        // Gán lại biến emptyState sau khi DOM tải
+        let emptyStateElement = document.getElementById('empty-state');
+        // Sửa hàm renderChannelCard để kiểm tra emptyStateElement
+        function renderChannelCard(channelId, data) {
+            if (emptyStateElement && emptyStateElement.parentElement) {
+                emptyStateElement.parentElement.removeChild(emptyStateElement);
+                emptyStateElement = null; // Đặt là null sau khi xóa
+            }
+            // ... (phần còn lại của hàm giữ nguyên) ...
+// ... (phần code cũ của hàm) ...
+            let card = document.getElementById(`channel-${channelId}`);
+            if (!card) {
+                card = document.createElement('div');
+                card.id = `channel-${channelId}`;
+                card.className = 'video-card bg-white p-4 rounded-lg shadow-md';
+                videoFeed.prepend(card); // Thêm vào đầu
+            }
+
+            let content = '';
+            if (data.loading) {
+                content = `<div class="flex items-center gap-2">
+                                <div class="loader"></div>
+                                <span class="text-gray-500">Đang tải dữ liệu cho kênh ${channelId}...</span>
+                           </div>`;
+            } else if (data.error) {
+                content = `<h3 class="text-xl font-bold mb-2 text-red-700">${channelId}</h3>
+                           <p class="text-red-500">Lỗi: ${data.error}</p>`;
+            } else {
+                let videosHTML = '';
+                if (data.videos.length === 0) {
+                    videosHTML = '<li class="text-gray-500">Không tìm thấy video nào.</li>';
+                } else {
+                    data.videos.forEach(video => {
+                        videosHTML += `
+                            <li class="flex flex-col sm:flex-row justify-between sm:items-center py-2 border-b last:border-b-0">
+                                <a href="https://www.youtube.com/watch?v=${video.id}" target="_blank" rel="noopener noreferrer" class="text-gray-800 hover:text-red-600 break-words">${video.title}</a>
+                                <span class="text-sm text-gray-500 whitespace-nowrap pt-1 sm:pt-0 sm:pl-4">${formatRealDate(video.publishedAt)}</span>
+                            </li>
+                        `;
+                    });
+                }
+                
+                content = `
+                    <h3 class="text-xl font-bold mb-2 text-red-700">${data.channelTitle || channelId}</h3>
+                    <ul class="divide-y divide-gray-200">
+                        ${videosHTML}
+                    </ul>
+                `;
+            }
+            card.innerHTML = content;
+        }
+
+
+    </script>
+</body>
+</html>
