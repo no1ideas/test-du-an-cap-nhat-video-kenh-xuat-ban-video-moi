@@ -1,112 +1,124 @@
 // api/get-videos.js
-// Hỗ trợ đầy đủ: channelId, @handle, /c/username, /user/username, link YouTube đầy đủ
-// Yêu cầu biến môi trường: YOUTUBE_API_KEY
+// Hỗ trợ: UCID, @handle, /c/<name>, /user/<name>, link youtube đầy đủ
+// Nhận cả tham số ?channelId= và ?channel=
+// Cần biến môi trường: YOUTUBE_API_KEY
 
-import fetch from "node-fetch";
+export const config = { runtime: 'nodejs18.x' };
 
 export default async function handler(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-
-  if (req.method === "OPTIONS") return res.status(200).json({ ok: true });
-  if (req.method !== "GET") return res.status(405).json({ error: "Phương thức không hợp lệ" });
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') return res.status(200).json({ ok: true });
+  if (req.method !== 'GET') return res.status(405).json({ error: 'Method Not Allowed' });
 
   const API_KEY = process.env.YOUTUBE_API_KEY;
-  if (!API_KEY) return res.status(500).json({ error: "Thiếu API key YouTube" });
+  if (!API_KEY) return res.status(500).json({ error: 'Thiếu YOUTUBE_API_KEY' });
 
-  const input = (req.query.channel || "").trim();
-  if (!input) return res.status(400).json({ error: "Thiếu tham số channel" });
+  // Hỗ trợ cả hai tên tham số
+  const inputRaw = (req.query.channel ?? req.query.channelId ?? '').trim();
+
+  console.log('[get-videos] query =', req.query); // xem trong Vercel Logs
+
+  if (!inputRaw) {
+    return res.status(400).json({ error: 'Thiếu tham số channel hoặc channelId' });
+  }
 
   try {
-    const channelId = await resolveChannelId(input, API_KEY);
-    if (!channelId) return res.status(404).json({ error: "Không xác định được channelId" });
+    const channelId = await resolveChannelId(inputRaw, API_KEY);
+    if (!channelId) {
+      return res.status(404).json({ error: 'Không xác định được channelId từ đầu vào' });
+    }
 
-    const channelInfo = await fetch(
-      `https://www.googleapis.com/youtube/v3/channels?part=contentDetails,snippet&id=${channelId}&key=${API_KEY}`
+    const chInfo = await fetch(
+      `https://www.googleapis.com/youtube/v3/channels?part=snippet,contentDetails&id=${channelId}&key=${API_KEY}`
     );
-    const data = await channelInfo.json();
-    if (!data.items?.length) return res.status(404).json({ error: "Không tìm thấy kênh" });
+    if (!chInfo.ok) throw new Error(`channels: ${chInfo.status} ${chInfo.statusText}`);
+    const chData = await chInfo.json();
+    if (!chData.items?.length) return res.status(404).json({ error: 'Không tìm thấy kênh' });
 
-    const uploads = data.items[0].contentDetails.relatedPlaylists.uploads;
-    const title = data.items[0].snippet.title;
+    const title = chData.items[0].snippet.title;
+    const uploads = chData.items[0].contentDetails.relatedPlaylists.uploads;
 
-    const videosRes = await fetch(
+    const vidsRes = await fetch(
       `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId=${uploads}&maxResults=3&key=${API_KEY}`
     );
-    const videosData = await videosRes.json();
+    if (!vidsRes.ok) throw new Error(`playlistItems: ${vidsRes.status} ${vidsRes.statusText}`);
+    const vidsData = await vidsRes.json();
 
-    const videos = (videosData.items || []).map((v) => ({
-      title: v.snippet.title,
-      videoId: v.snippet.resourceId.videoId,
-      publishedAt: formatDateVN(v.snippet.publishedAt),
-    }));
+    const videos = (vidsData.items || []).map((it) => ({
+      id: it?.snippet?.resourceId?.videoId,
+      title: it?.snippet?.title,
+      publishedAt: it?.snippet?.publishedAt
+    })).filter(v => v.id);
 
-    res.status(200).json({ channelId, title, videos });
-  } catch (err) {
-    console.error("Lỗi:", err);
-    res.status(500).json({ error: "Không thể tải dữ liệu kênh." });
+    return res.status(200).json({ channelTitle: title, videos });
+  } catch (e) {
+    console.error('[get-videos] error:', e);
+    return res.status(500).json({ error: 'Lỗi máy chủ nội bộ' });
   }
 }
 
-// =================== Các hàm phụ ===================
-
-// ✅ Tự động nhận dạng UCID từ mọi dạng URL
+// ---------- Helpers ----------
 async function resolveChannelId(input, API_KEY) {
-  // Nếu có UCID sẵn
-  const matchUC = input.match(/UC[0-9A-Za-z_-]{20,}/);
-  if (matchUC) return matchUC[0];
+  const raw = input.trim();
 
-  // Nếu có dạng channel/UCxxxx
-  const matchChannel = input.match(/channel\/(UC[0-9A-Za-z_-]{20,})/);
-  if (matchChannel) return matchChannel[1];
+  // 1) Có sẵn UCID
+  const mUC = raw.match(/UC[0-9A-Za-z_-]{20,}/);
+  if (mUC) return mUC[0];
 
-  // Nếu là link hoặc @handle -> thử YouTube API search
-  const handleMatch = input.match(/@([A-Za-z0-9._-]+)/);
-  const query = handleMatch ? handleMatch[1] : input;
+  // 2) Link /channel/UC...
+  const mCh = raw.match(/channel\/(UC[0-9A-Za-z_-]{20,})/i);
+  if (mCh) return mCh[1];
 
-  const searchRes = await fetch(
-    `https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&maxResults=1&q=${encodeURIComponent(
-      query
-    )}&key=${API_KEY}`
-  );
-  const searchData = await searchRes.json();
-  const apiId = searchData.items?.[0]?.id?.channelId;
-  if (apiId) return apiId;
+  // 3) /user/<name> (cũ)
+  const mUser = raw.match(/youtube\.com\/user\/([A-Za-z0-9._-]+)/i);
+  if (mUser) {
+    const u = `https://www.googleapis.com/youtube/v3/channels?part=id&forUsername=${encodeURIComponent(mUser[1])}&key=${API_KEY}`;
+    const r = await fetch(u); const j = await r.json();
+    if (j.items?.[0]?.id) return j.items[0].id;
+  }
 
-  // Nếu API không trả về, thử bóc trực tiếp từ HTML
-  const scraped = await scrapeChannelIdFromPage(input);
+  // 4) @handle hoặc /c/<name>
+  const mHandle = raw.match(/@([A-Za-z0-9._-]+)/);
+  const mCustom = raw.match(/youtube\.com\/c\/([A-Za-z0-9._-]+)/i);
+  const keyword = mHandle ? mHandle[1] : mCustom ? mCustom[1] : null;
+
+  // 4a) thử YouTube search
+  if (keyword) {
+    const s = await fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&maxResults=1&q=${encodeURIComponent(keyword)}&key=${API_KEY}`);
+    const sj = await s.json();
+    const cid = sj.items?.[0]?.id?.channelId || sj.items?.[0]?.snippet?.channelId;
+    if (cid) return cid;
+  }
+
+  // 4b) scrape HTML trang YouTube để bóc "channelId":"UC..."
+  const scraped = await scrapeChannelIdFromPage(raw);
   if (scraped) return scraped;
 
-  return null;
+  // 5) cuối cùng: search toàn chuỗi
+  const s2 = await fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&maxResults=1&q=${encodeURIComponent(raw)}&key=${API_KEY}`);
+  const s2j = await s2.json();
+  return s2j.items?.[0]?.id?.channelId || null;
 }
 
-// ✅ Bóc UCID từ mã HTML của trang YouTube
 async function scrapeChannelIdFromPage(urlOrHandle) {
-  let url = urlOrHandle.trim();
-  if (!url.startsWith("http")) url = `https://www.youtube.com/${url.replace(/^@/, "@")}`;
+  let url = urlOrHandle;
+  if (!/^https?:\/\//i.test(url)) {
+    url = `https://www.youtube.com/${url.replace(/^@/, '@')}`;
+  }
   try {
-    const resp = await fetch(url, {
+    const r = await fetch(url, {
       headers: {
-        "user-agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36",
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36',
+        'accept-language': 'en-US,en;q=0.9',
       },
+      redirect: 'follow'
     });
-    const html = await resp.text();
-    const match = html.match(/"channelId":"(UC[0-9A-Za-z_-]{20,})"/);
-    return match ? match[1] : null;
+    const html = await r.text();
+    const m = html.match(/"channelId":"(UC[0-9A-Za-z_-]{20,})"/);
+    return m ? m[1] : null;
   } catch {
     return null;
   }
-}
-
-// ✅ Định dạng giờ Việt Nam
-function formatDateVN(iso) {
-  const d = new Date(iso);
-  const dd = String(d.getDate()).padStart(2, "0");
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const yy = d.getFullYear();
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mi = String(d.getMinutes()).padStart(2, "0");
-  return `${hh}:${mi} ${dd}/${mm}/${yy}`;
 }
