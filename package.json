@@ -2,5 +2,7 @@
   "name": "youtube-tracker-project",
   "version": "1.0.0",
   "description": "YouTube Tracker App for Vercel",
-  "dependencies": { "node-fetch": "^2.6.0" }
+  "dependencies": {
+    "node-fetch": "^2.6.0"
+  }
 }
