@@ -1,8 +1,8 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="vi">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>YouTube Video Tracker</title>
   <script src="https://cdn.tailwindcss.com"></script>
 </head>
@@ -11,34 +11,34 @@
     <h1 class="text-3xl font-bold text-center text-red-600 mb-8">YouTube Video Tracker</h1>
 
     <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-      <!-- Left column -->
+      <!-- Quản lý kênh -->
       <div class="bg-white p-6 rounded-2xl shadow">
-        <h2 class="text-xl font-semibold mb-4">Channel Manager</h2>
-        <label class="block mb-2 text-gray-600">Add a YouTube channel (URL / @handle / UCID):</label>
+        <h2 class="text-xl font-semibold mb-4">Quản Lý Kênh</h2>
+        <label class="block mb-2 text-gray-600">Nhập link kênh YouTube (dạng <b>https://www.youtube.com/@HANDLE</b>):</label>
         <div class="flex">
           <input
             id="channelInput"
-            type="text"
-            placeholder="e.g., https://www.youtube.com/@MrBeast or UCX6OQ3DkcsbYNE6H8uQQuVA"
+            type="url"
+            placeholder="https://www.youtube.com/@TRANSYTAMOFFICIAL"
             class="flex-grow border border-gray-300 rounded-l-lg px-3 py-2 focus:ring focus:ring-red-200"
           />
           <button
             id="addBtn"
             class="bg-red-600 text-white px-5 py-2 rounded-r-lg hover:bg-red-700 transition"
           >
-            Add
+            Thêm
           </button>
         </div>
         <p class="text-sm text-gray-500 mt-2">
-          You can enter a <b>channel link</b>, <b>@handle</b>, or <b>UCID</b>.
+          Chỉ cần dán <b>link kênh</b> dạng <code>/@handle</code>. Ví dụ: <i>https://www.youtube.com/@no1ideas</i>.
         </p>
       </div>
 
-      <!-- Right column -->
+      <!-- Video mới nhất -->
       <div class="bg-white p-6 rounded-2xl shadow">
-        <h2 class="text-xl font-semibold mb-4">Latest Videos</h2>
+        <h2 class="text-xl font-semibold mb-4">Video Mới Nhất</h2>
         <div id="videoList" class="space-y-4 text-sm text-gray-700">
-          <p>No channels yet. Please add a channel ID or link on the left.</p>
+          <p>Chưa có kênh nào. Hãy thêm link kênh bên trái.</p>
         </div>
       </div>
     </div>
@@ -49,19 +49,8 @@
     const input = document.getElementById("channelInput");
     const videoList = document.getElementById("videoList");
 
-    function setLoading(channel) {
-      videoList.innerHTML = `
-        <div class="p-4 border border-gray-200 rounded-lg text-center text-gray-500">
-          <div class="flex items-center justify-center gap-2">
-            <svg class="animate-spin h-5 w-5" viewBox="0 0 24 24" fill="none">
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-              <path class="opacity-75" fill="currentColor"
-                d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
-            </svg>
-            <span>Loading data for <b>${channel}</b>…</span>
-          </div>
-        </div>
-      `;
+    function isValidChannelUrl(url) {
+      return /^https?:\/\/(www\.)?youtube\.com\/@[\w.\-]+\/?$/i.test(url.trim());
     }
 
     function formatLocal(dt) {
@@ -75,33 +64,36 @@
     }
 
     async function fetchVideos() {
-      const channel = input.value.trim();
-      if (!channel) {
-        alert("Please enter a channel URL, @handle, or UCID!");
+      const channelUrl = input.value.trim();
+      if (!isValidChannelUrl(channelUrl)) {
+        alert("Vui lòng nhập đúng link kênh dạng https://www.youtube.com/@HANDLE");
         return;
       }
 
-      setLoading(channel);
+      videoList.innerHTML = `
+        <div class="p-4 border border-gray-200 rounded-lg text-center text-gray-500">
+          Đang tải dữ liệu cho <b>${channelUrl}</b>...
+        </div>
+      `;
 
       try {
-        const res = await fetch(`/api/get-videos?channel=${encodeURIComponent(channel)}`);
+        const res = await fetch(`/api/get-videos?channel=${encodeURIComponent(channelUrl)}`);
         const data = await res.json();
 
         if (!res.ok || data.error) {
           videoList.innerHTML = `
             <div class="p-4 border border-red-300 bg-red-50 text-red-600 rounded-lg">
-              <b>${channel}</b><br/>Error: ${data.error || "Channel not found with this identifier."}
+              <b>${channelUrl}</b><br/>Lỗi: ${data.error || "Không tìm thấy kênh với link này"}
             </div>
           `;
           return;
         }
 
         const { channelTitle, videos } = data;
-
         if (!Array.isArray(videos) || videos.length === 0) {
           videoList.innerHTML = `
             <div class="p-4 border border-yellow-300 bg-yellow-50 text-yellow-700 rounded-lg">
-              Channel <b>${channelTitle}</b> has no videos yet.
+              Kênh <b>${channelTitle}</b> chưa có video nào.
             </div>
           `;
           return;
@@ -127,7 +119,7 @@
         console.error(err);
         videoList.innerHTML = `
           <div class="p-4 border border-red-300 bg-red-50 text-red-600 rounded-lg">
-            An error occurred while loading data from the server.
+            Đã xảy ra lỗi khi tải dữ liệu từ server.
           </div>
         `;
       }
