@@ -1,7 +1,7 @@
 {
-  "name": "youtube-tracker-project",
+  "name": "youtube-tracker",
   "version": "1.0.0",
-  "description": "YouTube Video Tracker - Theo dõi video mới từ các kênh YouTube, gửi email thông báo qua Resend và lưu trạng thái bằng Vercel KV",
+  "description": "Theo dõi video mới từ kênh YouTube bằng link @handle, gửi email qua Resend và lưu trạng thái bằng Vercel KV.",
   "type": "module",
   "private": true,
   "scripts": {
@@ -16,6 +16,5 @@
   "engines": {
     "node": ">=18.0.0"
   },
-  "author": "Nguyễn Mão",
   "license": "MIT"
 }
