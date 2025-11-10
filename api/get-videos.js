@@ -1,103 +1,128 @@
-// --- Helpers robust ---
+// Hỗ trợ: UCID, @handle, /c/<name>, /user/<name>, link youtube đầy đủ
+// Nhận cả tham số ?channelId= và ?channel=
+// Cần biến môi trường: YOUTUBE_API_KEY
 
-// Bóc "channelId":"UC..." từ HTML trang YouTube (fallback cuối)
-async function scrapeChannelIdFromPage(input) {
-  // Chấp nhận @handle, đường dẫn rút gọn, hoặc full URL
-  let url = (input || '').trim();
-  if (!/^https?:\/\//i.test(url)) {
-    // Nếu chỉ là @handle hoặc đoạn đường dẫn, chuẩn hóa thành URL
-    url = `https://www.youtube.com/${url.replace(/^@/, '@')}`;
+export const config = { runtime: 'nodejs18.x' };
+
+export default async function handler(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') return res.status(200).json({ ok: true });
+  if (req.method !== 'GET') return res.status(405).json({ error: 'Method Not Allowed' });
+
+  const API_KEY = process.env.YOUTUBE_API_KEY;
+  if (!API_KEY) return res.status(500).json({ error: 'Thiếu YOUTUBE_API_KEY' });
+
+  // Cho phép dùng ?channel hoặc ?channelId
+  const inputRaw = (req.query.channel ?? req.query.channelId ?? '').trim();
+  if (!inputRaw) {
+    return res.status(400).json({ error: 'Thiếu tham số channel hoặc channelId' });
   }
-  // Gọt bớt đuôi /videos, /featured, /streams… nếu có
-  url = url.replace(/\/(videos|featured|streams|shorts|live)(\/)?$/i, '');
+
+  console.log('[get-videos] query =', req.query); // xem trong Vercel Logs
 
   try {
-    const r = await fetch(url, {
-      headers: {
-        'user-agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36',
-        'accept-language': 'en-US,en;q=0.9',
-      },
-      redirect: 'follow',
-    });
-    const html = await r.text();
+    const channelId = await resolveChannelId(inputRaw, API_KEY);
+    if (!channelId) {
+      return res.status(404).json({ error: 'Không tìm thấy kênh với ID này' });
+    }
 
-    // Cách 1: tìm trong JSON big script "channelId":"UC..."
-    let m = html.match(/"channelId":"(UC[0-9A-Za-z_-]{20,})"/);
-    if (m) return m[1];
+    // Lấy thông tin kênh
+    const chInfo = await fetch(
+      `https://www.googleapis.com/youtube/v3/channels?part=snippet,contentDetails&id=${channelId}&key=${API_KEY}`
+    );
+    if (!chInfo.ok) throw new Error(`channels: ${chInfo.status} ${chInfo.statusText}`);
+    const chData = await chInfo.json();
+    if (!chData.items?.length) return res.status(404).json({ error: 'Không tìm thấy kênh' });
 
-    // Cách 2: đôi khi có trong link canonical
-    m = html.match(/https:\/\/www\.youtube\.com\/channel\/(UC[0-9A-Za-z_-]{20,})/i);
-    if (m) return m[1];
+    const title = chData.items[0].snippet.title;
+    const uploads = chData.items[0].contentDetails.relatedPlaylists.uploads;
 
-    return null;
-  } catch {
-    return null;
+    // Lấy 3 video mới nhất
+    const vidsRes = await fetch(
+      `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId=${uploads}&maxResults=3&key=${API_KEY}`
+    );
+    if (!vidsRes.ok) throw new Error(`playlistItems: ${vidsRes.status} ${vidsRes.statusText}`);
+    const vidsData = await vidsRes.json();
+
+    const videos = (vidsData.items || []).map((it) => ({
+      id: it?.snippet?.resourceId?.videoId,
+      title: it?.snippet?.title,
+      publishedAt: it?.snippet?.publishedAt
+    })).filter(v => v.id);
+
+    return res.status(200).json({ channelTitle: title, videos });
+  } catch (e) {
+    console.error('[get-videos] error:', e);
+    return res.status(500).json({ error: 'Lỗi máy chủ nội bộ' });
   }
 }
 
-// Nâng cấp: nhận @handle (forHandle), /user/, /c/, UCID, URL… + fallback scrape
+// ---------- Helpers ----------
 async function resolveChannelId(input, API_KEY) {
-  const raw = (input || '').trim();
-  if (!raw) return null;
+  const raw = input.trim();
 
-  // 0) Nếu đã là UCID
-  const mUC = raw.match(/(UC[0-9A-Za-z_-]{20,})/);
-  if (mUC) return mUC[1];
+  // 1) Có sẵn UCID
+  const mUC = raw.match(/UC[0-9A-Za-z_-]{20,}/);
+  if (mUC) return mUC[0];
 
-  // 1) URL /channel/UC...
-  const mChannel = raw.match(/youtube\.com\/channel\/(UC[0-9A-Za-z_-]{20,})/i);
-  if (mChannel) return mChannel[1];
+  // 2) Link /channel/UC...
+  const mCh = raw.match(/channel\/(UC[0-9A-Za-z_-]{20,})/i);
+  if (mCh) return mCh[1];
 
-  // 2) /user/<name> (legacy username)
+  // 3) /user/<name> (cũ)
   const mUser = raw.match(/youtube\.com\/user\/([A-Za-z0-9._-]+)/i);
   if (mUser) {
-    const url = `https://www.googleapis.com/youtube/v3/channels?part=id&forUsername=${encodeURIComponent(
-      mUser[1]
-    )}&key=${API_KEY}`;
-    const r = await fetch(url);
-    const j = await r.json();
-    if (j.items?.[0]?.id) return j.items[0].id;
-  }
-
-  // 3) @handle hoặc /c/<name> hoặc URL @handle
-  const mHandle = raw.match(/@([A-Za-z0-9._-]+)/); // match cả HOA/thường
-  const mCustom = raw.match(/youtube\.com\/c\/([A-Za-z0-9._-]+)/i);
-  const handle = mHandle ? `@${mHandle[1].toLowerCase()}` : null; // handle không phân biệt hoa/thường
-  const keyword = mHandle ? mHandle[1] : mCustom ? mCustom[1] : null;
-
-  // 3a) Ưu tiên: forHandle (ổn định hơn search)
-  if (handle) {
-    const u = `https://www.googleapis.com/youtube/v3/channels?part=id&forHandle=${encodeURIComponent(
-      handle
-    )}&key=${API_KEY}`;
+    const u = `https://www.googleapis.com/youtube/v3/channels?part=id&forUsername=${encodeURIComponent(mUser[1])}&key=${API_KEY}`;
     const r = await fetch(u);
     const j = await r.json();
     if (j.items?.[0]?.id) return j.items[0].id;
   }
 
-  // 3b) Fallback: search theo handle/custom name
+  // 4) @handle hoặc /c/<name>
+  const mHandle = raw.match(/@([A-Za-z0-9._-]+)/);
+  const mCustom = raw.match(/youtube\.com\/c\/([A-Za-z0-9._-]+)/i);
+  const keyword = mHandle ? mHandle[1] : mCustom ? mCustom[1] : null;
+
+  // 4a) Nếu có handle -> dùng API forHandle (YouTube Data API v3 2023+)
   if (keyword) {
-    const s = await fetch(
-      `https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&maxResults=1&q=${encodeURIComponent(
-        keyword
-      )}&key=${API_KEY}`
-    );
-    const sj = await s.json();
-    const cid = sj.items?.[0]?.id?.channelId || sj.items?.[0]?.snippet?.channelId;
-    if (cid) return cid;
+    const url = `https://www.googleapis.com/youtube/v3/channels?part=id,snippet&forHandle=${encodeURIComponent(keyword)}&key=${API_KEY}`;
+    const resp = await fetch(url);
+    const data = await resp.json();
+    if (data.items?.[0]?.id) return data.items[0].id;
   }
 
-  // 3c) Fallback: scrape HTML từ chính input (URL hoặc @handle)
+  // 4b) Nếu vẫn chưa có -> fallback search
+  const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&maxResults=1&q=${encodeURIComponent(raw)}&key=${API_KEY}`;
+  const searchResp = await fetch(searchUrl);
+  const searchData = await searchResp.json();
+  if (searchData.items?.[0]?.id?.channelId) return searchData.items[0].id.channelId;
+
+  // 5) Cuối cùng: scrape HTML nếu vẫn thất bại
   const scraped = await scrapeChannelIdFromPage(raw);
   if (scraped) return scraped;
 
-  // 4) Phương án cuối: search toàn chuỗi đầu vào
-  const s2 = await fetch(
-    `https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&maxResults=1&q=${encodeURIComponent(
-      raw
-    )}&key=${API_KEY}`
-  );
-  const s2j = await s2.json();
-  return s2j.items?.[0]?.id?.channelId || null;
+  return null;
+}
+
+async function scrapeChannelIdFromPage(urlOrHandle) {
+  let url = urlOrHandle;
+  if (!/^https?:\/\//i.test(url)) {
+    url = `https://www.youtube.com/${url.replace(/^@/, '@')}`;
+  }
+  try {
+    const r = await fetch(url, {
+      headers: {
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+        'accept-language': 'en-US,en;q=0.9',
+      },
+      redirect: 'follow'
+    });
+    const html = await r.text();
+    const m = html.match(/"channelId":"(UC[0-9A-Za-z_-]{20,})"/);
+    return m ? m[1] : null;
+  } catch {
+    return null;
+  }
 }
