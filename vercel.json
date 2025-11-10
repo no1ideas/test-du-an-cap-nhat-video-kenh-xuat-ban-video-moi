@@ -3,6 +3,6 @@
     { "path": "/api/check-channels", "schedule": "*/10 * * * *" }
   ],
   "functions": {
-    "api/**/*.mjs": { "runtime": "nodejs18.x" }
+    "api/**/*.{js,mjs}": { "runtime": "nodejs18.x" }
   }
 }
