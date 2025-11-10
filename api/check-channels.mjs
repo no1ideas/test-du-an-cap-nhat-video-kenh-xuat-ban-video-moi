@@ -1,6 +1,4 @@
 // api/check-channels.mjs
-// Cron: kiểm tra list kênh (link /@handle), có video mới thì email qua Resend và lưu KV.
-
 export const config = { runtime: 'nodejs18.x' };
 
 import { Resend } from 'resend';
@@ -28,7 +26,6 @@ function extractHandleFromUrl(url) {
 }
 
 async function resolveChannelIdFromUrl(url, API_KEY) {
-  // /channel/UC...
   const mCh = url.match(/youtube\.com\/channel\/(UC[0-9A-Za-z_-]{20,})/i);
   if (mCh) return mCh[1];
 
@@ -43,7 +40,6 @@ async function resolveChannelIdFromUrl(url, API_KEY) {
   const sj = await s.json();
   if (sj.items?.[0]?.id?.channelId) return sj.items[0].id.channelId;
 
-  // scrape fallback
   try {
     const r = await fetch(url.replace(/\/(videos|featured|shorts|live)\/?$/i, ''), {
       headers: {
@@ -72,9 +68,10 @@ async function getLatestVideos(channelId, API_KEY, maxResults = 3) {
 
   const plRes = await fetch(`https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId=${uploads}&maxResults=${maxResults}&key=${API_KEY}`);
   if (!plRes.ok) throw new Error(`playlistItems: ${plRes.status} ${plRes.statusText}`);
-  const plData = await plRes.json();
+  const plData = await chRes.json().catch(()=>({items:[]})) || await plRes.json();
 
-  const videos = (plData.items || []).map(it => ({
+  const items = (plData.items || []);
+  const videos = items.map(it => ({
     id: it?.snippet?.resourceId?.videoId,
     title: it?.snippet?.title,
     publishedAt: it?.snippet?.publishedAt

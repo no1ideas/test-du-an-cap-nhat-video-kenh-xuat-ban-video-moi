@@ -22,7 +22,6 @@ export default async function handler(req, res) {
     const channelId = await resolveChannelIdFromUrl(inputRaw, API_KEY);
     if (!channelId) return res.status(404).json({ error: 'Không tìm thấy kênh với link này' });
 
-    // lấy info kênh & uploads playlist
     const chInfo = await fetch(`https://www.googleapis.com/youtube/v3/channels?part=snippet,contentDetails&id=${channelId}&key=${API_KEY}`);
     if (!chInfo.ok) throw new Error(`channels: ${chInfo.status} ${chInfo.statusText}`);
     const chData = await chInfo.json();
@@ -31,7 +30,6 @@ export default async function handler(req, res) {
     const title = chData.items[0].snippet.title;
     const uploads = chData.items[0].contentDetails.relatedPlaylists.uploads;
 
-    // lấy 3 video mới nhất
     const vidsRes = await fetch(`https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId=${uploads}&maxResults=3&key=${API_KEY}`);
     if (!vidsRes.ok) throw new Error(`playlistItems: ${vidsRes.status} ${vidsRes.statusText}`);
     const vidsData = await vidsRes.json();
@@ -51,19 +49,16 @@ export default async function handler(req, res) {
   }
 }
 
-// --------- Helpers (chỉ nhận link /@handle) + fallback ---------
+// --------- Helpers ---------
 function extractHandleFromUrl(url) {
-  // chấp nhận .../@@, thêm lower-case để ổn định
   const m = url.trim().match(/youtube\.com\/@([\w.\-]+)/i);
   return m ? m[1].toLowerCase() : null;
 }
 
 async function resolveChannelIdFromUrl(url, API_KEY) {
-  // 1) nếu link lại là /channel/UC... thì lấy thẳng
   const mCh = url.match(/youtube\.com\/channel\/(UC[0-9A-Za-z_-]{20,})/i);
   if (mCh) return mCh[1];
 
-  // 2) ưu tiên forHandle=@handle (ổn định nhất)
   const handle = extractHandleFromUrl(url);
   if (handle) {
     const r = await fetch(`https://www.googleapis.com/youtube/v3/channels?part=id,snippet&forHandle=${encodeURIComponent(handle)}&key=${API_KEY}`);
@@ -71,12 +66,10 @@ async function resolveChannelIdFromUrl(url, API_KEY) {
     if (j.items?.[0]?.id) return j.items[0].id;
   }
 
-  // 3) fallback: search
   const s = await fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&maxResults=1&q=${encodeURIComponent(url)}&key=${API_KEY}`);
   const sj = await s.json();
   if (sj.items?.[0]?.id?.channelId) return sj.items[0].id.channelId;
 
-  // 4) fallback cuối: scrape HTML (khi API bị restrict)
   const scraped = await scrapeChannelIdFromPage(url);
   return scraped || null;
 }
