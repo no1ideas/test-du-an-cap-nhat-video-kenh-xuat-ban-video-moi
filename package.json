@@ -5,7 +5,6 @@
   "description": "YouTube Tracker App for Vercel (with Resend email test)",
   "dependencies": {
     "@vercel/kv": "^1.0.1",
-    "node-fetch": "^2.6.0",
     "resend": "^4.0.0"
   }
 }
